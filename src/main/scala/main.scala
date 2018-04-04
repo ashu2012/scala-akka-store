@@ -1,74 +1,132 @@
-import akka.actor.{ ActorRef, ActorSystem, Props, Actor, Inbox }
+package helloakka
+
+import akka.actor.{Actor, ActorRef, ActorSystem, Inbox, Props}
+
 import scala.concurrent.duration._
 import scala.collection._
+import akka.pattern.ask
+import akka.pattern.pipe
+import akka.util.Timeout
+import scala.concurrent
+import scala.concurrent.ExecutionContext.Implicits.global
+import akka.event.Logging
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration._
+import scala.util.Random
+
 
 case object product
+
 case class WhatToBuy(productId: String)
 case class Order(productId: String, itemCount:Int )
 case class Booking(productId:String, itemCount:Int)
+case class Event(message:String)
 
+class Buyer extends Actor with akka.actor.ActorLogging{
+  override def preStart() = {
+    log.debug("Starting")
+  }
+   def initiateReuest(product :String):Future[Event] ={
+     val sellerActor = context.actorOf(Props[Seller])
+     implicit val timeout = Timeout(10 seconds)
+     (sellerActor ? WhatToBuy(product)).mapTo[Event]
+   }
 
-class Buyer extends Actor{
+   def receive: Receive = {
 
+     case Event(message)=>{
+       println(message + " is received from Seller ")
+       log.info(message + " is received from Seller ")
+     }
+   }
 
 }
 
-class Seller extends Actor {
+class Seller extends Actor with akka.actor.ActorLogging {
   var productDescription = ""
 
   def receive = {
-    case WhatToBuy(productid) => productDescription = s"let me do inventory check for, $productid   . Please see full product page"
-    case Order(productId , quantity)    => sender ! orderService(productId, quantity) // Send the current greeting back to the sender
+    case WhatToBuy(productid) =>{
+      productDescription = s"let me do inventory check for, $productid   . Please see full product page"
+      sender().tell( Event(productDescription), self)
+    }
+    case Order(productId , quantity)    =>{
+      val orderActor = context.actorOf(Props[orderService])
+     implicit val timeout = Timeout(10 seconds)
+
+      val future = orderActor ? Booking(productId, quantity)
+      val result = Await.result(future, timeout.duration).asInstanceOf[Event]
+      println(result)
+      log.info(result.message)
+      sender().tell(result, self )
+
+
+    } // Send the current greeting back to the sender
+
+    case Event(message)=>{
+      println(message + " is received from OrderService ")
+      log.info(message + " is received from OrderService ")
+
+    }
   }
 }
 
 
 
 // prints a greeting
-class orderService extends Actor {
+class orderService extends Actor with akka.actor.ActorLogging{
 
-  var  userProductHistory = scala.collection.concurrent.TrieMap[String, String]()
+  var  userProductHistory = scala.collection.concurrent.TrieMap[String, Int]()
 
   def receive = {
-    case booking(productId, quantity) => {
-      println("bokking order ")
-      userProductHistory.put(productId, )
+    case Booking(productId, quantity) => {
+      println("checking product inventory ")
+      log.info("checking product inventory ")
+      Thread.sleep(Random.nextInt(5000-1000)+1000)
+      println("booking order ")
+      log.info("booking order ")
+      userProductHistory.put(productId,quantity )
+      val bookingConfirmation = s"order booked for $productId and $quantity"
+      sender() ! Event(bookingConfirmation)
     }
   }
 }
 
 object HelloAkkaScala extends App {
 
+
+
   // Create the 'helloakka' actor system
   val system = ActorSystem("helloakka")
 
-  // Create the 'greeter' actor
-  val greeter = system.actorOf(Props[Greeter], "greeter")
+  // Create the 'buyer' actor
+  val buyer = system.actorOf(Props[Buyer], "buyer")
 
+
+  val seller = system.actorOf(Props[Seller], "Seller")
   // Create an "actor-in-a-box"
   val inbox = Inbox.create(system)
 
-  // Tell the 'greeter' to change its 'greeting' message
-  greeter.tell(WhoToGreet("akka"), ActorRef.noSender)
+  // Tell the 'seller' to find listing for   'product' message
+  buyer.tell(WhatToBuy("akka"), seller)
 
   // Ask the 'greeter for the latest 'greeting'
   // Reply should go to the "actor-in-a-box"
-  inbox.send(greeter, Greet)
+  inbox.send(seller, WhatToBuy("mobile phone"))
 
   // Wait 5 seconds for the reply with the 'greeting' message
-  val Greeting(message1) = inbox.receive(5.seconds)
+  val Event( message1) = inbox.receive(5.seconds)
   println(s"Greeting: $message1")
 
-  // Change the greeting and ask for it again
-  greeter.tell(WhoToGreet("lightbend"), ActorRef.noSender)
-  inbox.send(greeter, Greet)
-  val Greeting(message2) = inbox.receive(5.seconds)
-  println(s"Greeting: $message2")
 
-  val greetPrinter = system.actorOf(Props[GreetPrinter])
-  // after zero seconds, send a Greet message every second to the greeter with a sender of the greetPrinter
-  system.scheduler.schedule(0.seconds, 1.second, greeter, Greet)(system.dispatcher, greetPrinter)
+     inbox.send(seller, Booking("mobile phone",1))
 
+  // Wait 5 seconds for the reply with the 'greeting' message
+  val Event( message) = inbox.receive(5.seconds)
+  println(s"Greeting: $message")
+
+
+system.scheduler.schedule(2 seconds, 0 minutes, seller, Booking("mobile phone",1))
 }
 
 
